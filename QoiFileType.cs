@@ -125,18 +125,19 @@ namespace QoiFileTypeNet {
         }
 
         private bool DetectIfSurfaceHasAlpha(Surface scratchSurface) {
-            bool hasAlpha = false;
             unsafe {
                 for (int y = 0; y < scratchSurface.Height; ++y) {
                     ColorBgra* src = scratchSurface.GetRowPointerUnchecked(y);
                     for (int x = 0; x < scratchSurface.Width; ++x) {
-                        hasAlpha = hasAlpha || (src->A != 255);
+                        if (src->A != 255) {
+                            return true;
+                        }
                         ++src;
                     }
                 }
             }
 
-            return hasAlpha;
+            return false;
         }
     }
 }
