@@ -24,5 +24,5 @@ using System.Runtime.Versioning;
 
 [assembly: SupportedOSPlatform("windows")]
 
-[assembly: AssemblyVersion("0.10.00.0")]
-[assembly: AssemblyFileVersion("0.10.00.0")]
+[assembly: AssemblyVersion("0.20.00.0")]
+[assembly: AssemblyFileVersion("0.20.00.0")]
