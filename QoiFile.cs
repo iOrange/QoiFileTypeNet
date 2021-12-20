@@ -21,16 +21,15 @@ namespace QoiFileTypeNet {
                    this.a == other.a;
         }
 
-        public override int GetHashCode() => (r, g, b, a).GetHashCode();
+        public override int GetHashCode() => r * 3 + g * 5 + b * 7 + a * 11;
 
         public static bool operator ==(QoiRgba a, QoiRgba b) => a.Equals(b);
         public static bool operator !=(QoiRgba a, QoiRgba b) => !a.Equals(b);
     }
 
     internal struct QoiDesc {
-        public const int QOI_SRGB               = 0x00;
-        public const int QOI_SRGB_LINEAR_ALPHA  = 0x01;
-        public const int QOI_LINEAR             = 0x0F;
+        public const int QOI_SRGB       = 0x00;
+        public const int QOI_LINEAR     = 0x01;
 
         public int width;
         public int height;
@@ -39,26 +38,23 @@ namespace QoiFileTypeNet {
     }
 
     internal static class QoiFile {
-        private const int QOI_INDEX = 0x00; // 00xxxxxx
-        private const int QOI_RUN_8 = 0x40; // 010xxxxx
-        private const int QOI_RUN_16 = 0x60; // 011xxxxx
-        private const int QOI_DIFF_8 = 0x80; // 10xxxxxx
-        private const int QOI_DIFF_16 = 0xC0; // 110xxxxx
-        private const int QOI_DIFF_24 = 0xE0; // 1110xxxx
-        private const int QOI_COLOR = 0xF0; // 1111xxxx
+        private const int QOI_OP_INDEX  = 0x00; // 00xxxxxx
+        private const int QOI_OP_DIFF   = 0x40; // 01xxxxxx
+        private const int QOI_OP_LUMA   = 0x80; // 10xxxxxx
+        private const int QOI_OP_RUN    = 0xC0; // 11xxxxxx
+        private const int QOI_OP_RGB    = 0xFE; // 11111110
+        private const int QOI_OP_RGBA   = 0xFF; // 11111111
 
-        private const int QOI_MASK_2 = 0xC0; // 11000000
-        private const int QOI_MASK_3 = 0xE0; // 11100000
-        private const int QOI_MASK_4 = 0xF0; // 11110000
+        private const int QOI_MASK_2    = 0xC0; // 11000000
 
-        private const int QOI_MAGIC = (((int)'q') << 24 | ((int)'o') << 16 | ((int)'i') << 8 | ((int)'f'));
+        private const int QOI_MAGIC     = (((int)'q') << 24 | ((int)'o') << 16 | ((int)'i') << 8 | ((int)'f'));
 
         private const int QOI_HEADER_SIZE = 14;
-        private const int QOI_PADDING = 4;
+        private const int QOI_PADDING     = 8;
 
-        private static int ColorHash(ref QoiRgba c) {
-            return c.r ^ c.g ^ c.b ^ c.a;
-        }
+        private static readonly byte[] QOI_PADDING_BYTES = { 0, 0, 0, 0, 0, 0, 0, 1 };
+
+        private const int QOI_PIXELS_MAX  = 400000000;
 
         private static uint SwapBytes(uint x) {
             return ((x & 0x000000ff) << 24) |
@@ -96,6 +92,10 @@ namespace QoiFileTypeNet {
                     return null;
                 }
 
+                if (desc.height >= QOI_PIXELS_MAX / desc.width) {
+                    return null;
+                }
+
                 int numPixels = (int)(desc.width * desc.height);
                 result = new QoiRgba[numPixels];
 
@@ -110,37 +110,32 @@ namespace QoiFileTypeNet {
                     } else if (reader.BaseStream.Position < chunksLen) {
                         byte b1 = reader.ReadByte();
 
-                        if ((b1 & QOI_MASK_2) == QOI_INDEX) {
-                            px = index[b1 ^ QOI_INDEX];
-                        } else if ((b1 & QOI_MASK_3) == QOI_RUN_8) {
-                            run = b1 & 0x1F;
-                        } else if ((b1 & QOI_MASK_3) == QOI_RUN_16) {
-                            byte b2 = reader.ReadByte();
-                            run = (((b1 & 0x1f) << 8) | (b2)) + 32;
-                        } else if ((b1 & QOI_MASK_2) == QOI_DIFF_8) {
+                        if (b1 == QOI_OP_RGB) {
+                            px.r = reader.ReadByte();
+                            px.g = reader.ReadByte();
+                            px.b = reader.ReadByte();
+                        } else if (b1 == QOI_OP_RGBA) {
+                            px.r = reader.ReadByte();
+                            px.g = reader.ReadByte();
+                            px.b = reader.ReadByte();
+                            px.a = reader.ReadByte();
+                        } else if ((b1 & QOI_MASK_2) == QOI_OP_INDEX) {
+                            px = index[b1];
+                        } else if ((b1 & QOI_MASK_2) == QOI_OP_DIFF) {
                             px.r += (byte)(((b1 >> 4) & 0x03) - 2);
                             px.g += (byte)(((b1 >> 2) & 0x03) - 2);
-                            px.b += (byte)((b1 & 0x03) - 2);
-                        } else if ((b1 & QOI_MASK_3) == QOI_DIFF_16) {
-                            byte b2 = reader.ReadByte();
-                            px.r += (byte)((b1 & 0x1f) - 16);
-                            px.g += (byte)((b2 >> 4) - 8);
-                            px.b += (byte)((b2 & 0x0f) - 8);
-                        } else if ((b1 & QOI_MASK_4) == QOI_DIFF_24) {
-                            byte b2 = reader.ReadByte();
-                            byte b3 = reader.ReadByte();
-                            px.r += (byte)((((b1 & 0x0f) << 1) | (b2 >> 7)) - 16);
-                            px.g += (byte)(((b2 & 0x7c) >> 2) - 16);
-                            px.b += (byte)((((b2 & 0x03) << 3) | ((b3 & 0xe0) >> 5)) - 16);
-                            px.a += (byte)((b3 & 0x1f) - 16);
-                        } else if ((b1 & QOI_MASK_4) == QOI_COLOR) {
-                            if ((b1 & 8) == 8) { px.r = reader.ReadByte(); }
-                            if ((b1 & 4) == 4) { px.g = reader.ReadByte(); }
-                            if ((b1 & 2) == 2) { px.b = reader.ReadByte(); }
-                            if ((b1 & 1) == 1) { px.a = reader.ReadByte(); }
+                            px.b += (byte)(( b1       & 0x03) - 2);
+                        } else if ((b1 & QOI_MASK_2) == QOI_OP_LUMA) {
+                            int b2 = reader.ReadByte();
+                            int vg = (b1 & 0x3F) - 32;
+                            px.r += (byte)(vg - 8 + ((b2 >> 4) & 0x0F));
+                            px.g += (byte) vg;
+                            px.b += (byte)(vg - 8 +  (b2       & 0x0F));
+                        } else if ((b1 & QOI_MASK_2) == QOI_OP_RUN) {
+                            run = (b1 & 0x3F);
                         }
 
-                        index[ColorHash(ref px) % 64] = px;
+                        index[px.GetHashCode() % 64] = px;
                     }
 
                     result[i] = px;
@@ -153,86 +148,79 @@ namespace QoiFileTypeNet {
         public static void Save(Stream output, ref QoiDesc desc, QoiRgba[] pixels) {
             BinaryWriter writer = new BinaryWriter(output);
 
-                writer.Write(SwapBytes(QOI_MAGIC));
-                writer.Write(SwapBytes(desc.width));
-                writer.Write(SwapBytes(desc.height));
-                writer.Write((byte)desc.channels);
-                writer.Write((byte)desc.colorspace);
+            writer.Write(SwapBytes(QOI_MAGIC));
+            writer.Write(SwapBytes(desc.width));
+            writer.Write(SwapBytes(desc.height));
+            writer.Write((byte)desc.channels);
+            writer.Write((byte)desc.colorspace);
 
-                QoiRgba px = new QoiRgba { r = 0, g = 0, b = 0, a = 255 };
-                QoiRgba pxPrev = px;
-                QoiRgba[] index = new QoiRgba[64];
+            QoiRgba px = new QoiRgba { r = 0, g = 0, b = 0, a = 255 };
+            QoiRgba pxPrev = px;
+            QoiRgba[] index = new QoiRgba[64];
 
-                int run = 0;
-                int numPixels = desc.width * desc.height;
-                for (int i = 0; i < numPixels; ++i) {
-                    px = pixels[i];
+            int run = 0;
+            int numPixels = desc.width * desc.height;
+            for (int i = 0; i < numPixels; ++i) {
+                px = pixels[i];
 
-                    if (px == pxPrev) {
-                        run++;
+                if (px == pxPrev) {
+                    run++;
+                    if (run == 62 || i == (numPixels - 1)) {
+                        writer.Write((byte)(QOI_OP_RUN | (run - 1)));
+                        run = 0;
                     }
-
-                    if (run > 0 && (run == 0x2020 || px != pxPrev || i == (numPixels - 1))) {
-                        if (run < 33) {
-                            run -= 1;
-                            writer.Write((byte)(QOI_RUN_8 | run));
-                        } else {
-                            run -= 33;
-                            writer.Write((byte)(QOI_RUN_16 | run >> 8));
-                            writer.Write((byte)run);
-                        }
+                } else {
+                    if (run > 0) {
+                        writer.Write((byte)(QOI_OP_RUN | (run - 1)));
                         run = 0;
                     }
 
-                    if (px != pxPrev) {
-                        int indexPos = ColorHash(ref px) % 64;
+                    int indexPos = px.GetHashCode() % 64;
 
-                        if (index[indexPos] == px) {
-                            writer.Write((byte)(QOI_INDEX | indexPos));
-                        } else {
-                            index[indexPos] = px;
+                    if (index[indexPos] == px) {
+                        writer.Write((byte)(QOI_OP_INDEX | indexPos));
+                    } else {
+                        index[indexPos] = px;
 
+                        if (px.a == pxPrev.a) {
                             int vr = px.r - pxPrev.r;
                             int vg = px.g - pxPrev.g;
                             int vb = px.b - pxPrev.b;
-                            int va = px.a - pxPrev.a;
 
-                            if (vr > -17 && vr < 16 &&
-                                vg > -17 && vg < 16 &&
-                                vb > -17 && vb < 16 &&
-                                va > -17 && va < 16) {
-                                if (va == 0 &&
-                                    vr > -3 && vr < 2 &&
-                                    vg > -3 && vg < 2 &&
-                                    vb > -3 && vb < 2) {
-                                    writer.Write((byte)(QOI_DIFF_8 | ((vr + 2) << 4) | (vg + 2) << 2 | (vb + 2)));
-                                } else if (va == 0 &&
-                                           vr > -17 && vr < 16 &&
-                                           vg >  -9 && vg <  8 &&
-                                           vb >  -9 && vb <  8 ) {
-                                    writer.Write((byte)(QOI_DIFF_16 | (vr + 16)));
-                                    writer.Write((byte)((vg + 8) << 4 | (vb + 8)));
-                                } else {
-                                    writer.Write((byte)(QOI_DIFF_24 | (vr + 16) >> 1));
-                                    writer.Write((byte)((vr + 16) << 7 | (vg + 16) << 2 | (vb + 16) >> 3));
-                                    writer.Write((byte)((vb + 16) << 5 | (va + 16)));
-                                }
+                            int vg_r = vr - vg;
+                            int vg_b = vb - vg;
+
+                            if (vr > -3 && vr < 2 &&
+                                vg > -3 && vg < 2 &&
+                                vb > -3 && vb < 2) {
+                                writer.Write((byte)(QOI_OP_DIFF | (vr + 2) << 4 | (vg + 2) << 2 | (vb + 2)));
+                            } else if (vg_r >  -9 && vg_r <  8 &&
+                                       vg   > -33 && vg   < 32 &&
+                                       vg_b >  -9 && vg_b <  8) {
+                                writer.Write((byte)(QOI_OP_LUMA | (vg + 32)));
+                                writer.Write((byte)((vg_r + 8) << 4 | (vg_b + 8)));
                             } else {
-                                writer.Write((byte)(QOI_COLOR | ((vr != 0) ? 8 : 0) | ((vg != 0) ? 4 : 0) | ((vb != 0) ? 2 : 0) | ((va != 0) ? 1 : 0)));
-                                if (vr != 0) { writer.Write(px.r); }
-                                if (vg != 0) { writer.Write(px.g); }
-                                if (vb != 0) { writer.Write(px.b); }
-                                if (va != 0) { writer.Write(px.a); }
+                                writer.Write((byte)QOI_OP_RGB);
+                                writer.Write(px.r);
+                                writer.Write(px.g);
+                                writer.Write(px.b);
                             }
+                        } else {
+                            writer.Write((byte)QOI_OP_RGBA);
+                            writer.Write(px.r);
+                            writer.Write(px.g);
+                            writer.Write(px.b);
+                            writer.Write(px.a);
                         }
                     }
-
-                    pxPrev = px;
                 }
 
-                for (int i = 0; i < QOI_PADDING; ++i) {
-                    writer.Write((byte)0);
-                }
+                pxPrev = px;
+            }
+
+            for (int i = 0; i < QOI_PADDING; ++i) {
+                writer.Write(QOI_PADDING_BYTES[i]);
+            }
         }
     }
 }
