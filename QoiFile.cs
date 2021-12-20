@@ -93,7 +93,7 @@ namespace QoiFileTypeNet {
                 }
 
                 if (desc.height >= QOI_PIXELS_MAX / desc.width) {
-                    return null;
+                    return result;
                 }
 
                 int numPixels = (int)(desc.width * desc.height);
