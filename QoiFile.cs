@@ -89,7 +89,7 @@ namespace QoiFileTypeNet {
                 desc.colorspace = reader.ReadByte();
 
                 if (desc.width == 0 || desc.height == 0 || desc.channels < 3 || desc.channels > 4) {
-                    return null;
+                    return result;
                 }
 
                 if (desc.height >= QOI_PIXELS_MAX / desc.width) {
